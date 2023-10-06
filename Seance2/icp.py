@@ -1,5 +1,5 @@
 """
- Simple 2D ICP implementation
+ Simple 2D ICP implementation: Contains a very basic implementation of the ICP method
  author: David Filliat
 """
 
@@ -60,10 +60,34 @@ def icp(model, data, maxIter, thres):
     dat = dat[:, valid]
 
     # ----------------------- TODO ------------------------
+    # dat_filt = dat
     # Filter data points too close to each other
     # Put the result in dat_filt
-    dat_filt = dat
-
+    # dat.shape = (2, 461)
+    
+    print("data",dat.shape)
+    
+    #Si los valores tienen una distancia menor a minResolution, se descartan. Para no borrar nada si los obstaculos estan lejos
+    minResolution = 0.05
+    prevPt = dat[:,0]
+    dat_filtered = []
+    for i in range(dat.shape[1]):
+        pt = dat[:,i]
+        if np.linalg.norm(prevPt-pt) > minResolution: #if distance between points is greater than minResolution then add it to dat_filtered
+            dat_filtered.append(pt)
+            prevPt = pt
+    dat_filt = np.stack(dat_filtered, axis=1) #Se desea apilar los puntos filtrados en columnas
+    print("datafilt",dat_filt.shape)
+    '''
+    res=[]
+    i=0
+    while i < dat.shape[1]:
+        res.append(dat[:,i])
+        i += 3
+    dat_filt = np.stack(res, axis=1)
+    '''
+    print("datafilt",dat_filt.shape)
+    
     # Initialize transformation to identity
     R = np.eye(2)
     t = np.zeros((2, 1))
@@ -77,13 +101,17 @@ def icp(model, data, maxIter, thres):
         meandist = np.mean(distance)
 
         # ----------------------- TODO ------------------------
+        #dat_matched = dat_filt
         # filter points matchings, keeping only the closest ones
         # you have to modify :
         # - 'dat_matched' with the points
         # - 'index' with the corresponding point index in ref
-        dat_matched = dat_filt
-
-
+        r=0.9
+        sorted_dist = np.sort(distance)
+        valid = distance <= sorted_dist[int(r*len(sorted_dist)-1)]
+        dat_matched = dat_filt[:, valid]
+        index = index[valid]
+        
         # ----- Compute transform
 
         # Compute point mean
@@ -114,3 +142,4 @@ def icp(model, data, maxIter, thres):
     print("finished with mean point corresp. error {:f}".format(meandist))
 
     return R, t, meandist
+

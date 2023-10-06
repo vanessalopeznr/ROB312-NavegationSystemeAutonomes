@@ -1,5 +1,5 @@
 """
-Reading a laser scan dataset
+Reading a laser scan dataset:  read and process the datasets provided in the dataset directory
 author: David Filliat
 """
 
@@ -142,7 +142,7 @@ def read_u2is_laser_entry(file):
     return laserTime, laserData
 
 
-def read_u2is(number):
+def read_u2is(number): #Read and return data as a list of dictionaries representing laser scans.
     """
     Reading and formating u2is dataset
     - input : number of scans to read
@@ -154,8 +154,8 @@ def read_u2is(number):
 
     print('Reading u2is dataset')
 
-    fileLaser = open('dataset/u2is/laser_filt.txt', 'r')
-    fileOdom = open('dataset/u2is/odom_filt.txt', 'r')
+    fileLaser = open('dataset/U2IS/laser_filt.txt', 'r')
+    fileOdom = open('dataset/U2IS/odom_filt.txt', 'r')
 
     scanList = []
 
@@ -244,7 +244,7 @@ def read_fr079_laser_entry(file):
     return laserTime, laserData
 
 
-def read_fr079(number):
+def read_fr079(number): #Read and return data as a list of dictionaries representing laser scans.
     """
     Reading and formating u2is dataset
     - input : number of scans to read

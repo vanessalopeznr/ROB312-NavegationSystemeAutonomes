@@ -1,5 +1,5 @@
 """
- Test ICP localisation
+ Test ICP localisation: Evaluate the performance of the ICP method and the variants you will implement
  Apply a random displacement to a scan and check the error of the recovered position through ICP
  author: David Filliat
 """
@@ -14,8 +14,8 @@ import icp
 
 
 # Reading some data
-scanList = datasets.read_u2is(56)
-scanOriginal = scanList[55]
+scanList = datasets.read_u2is(56) #output: list of dict with scans
+scanOriginal = scanList[55] 
 scanTruePose = np.array([0.3620, 0.0143, 0.0483])  # Manual estimation for scan 55 of u2is dataset
 
 # Initialise error log
@@ -31,7 +31,7 @@ for a in range(nb_test):
     randT = np.random.rand(2, 1) - 0.5
     randR = 0.6*np.random.rand(1, 1) - 0.3
     R = np.array([[math.cos(randR), -math.sin(randR)], [math.sin(randR), math.cos(randR)]])
-    scan = datasets.transform_scan(scanOriginal, R, randT)
+    scan = datasets.transform_scan(scanOriginal, R, randT) #transform_scan(scan, Rot matrix, translat vector)
 
     # Displays initial positions
     plt.cla()
@@ -42,7 +42,9 @@ for a in range(nb_test):
     plt.axis("equal")
 
     # perform ICP
+    #Cada dict tiene ranges, angles, pose, x, y
     R, t, error = icp.icp(refscan, scan, 200, 1e-7)
+    print("aqui")
 
     # Apply motion to scan
     scan = datasets.transform_scan(scan, R, t)
