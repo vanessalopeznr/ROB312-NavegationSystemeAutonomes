@@ -81,7 +81,8 @@ class Simulation:
                 iFeature = np.random.randint(0, self.Map.shape[1] - 1)
                 zNoise = np.sqrt(self.RTrue) @ np.random.randn(2)
                 zNoise = np.array([zNoise]).T
-                z = observation_model(self.xTrue, iFeature, self.Map) + zNoise
+                z = observation_model(self.xTrue, iFeature, self.Map) + zNoise.T
+                z=z.T
                 z[1, 0] = angle_wrap(z[1, 0])
                 print("EStoy aqui")
         else:
@@ -149,7 +150,6 @@ def G(x, u, dt_pred):
     Jac=np.array([[cos(x[2])*dt_pred, -sin(x[2])*dt_pred, 0],
                   [sin(x[2])*dt_pred, cos(x[2])*dt_pred, 0],
                   [0, 0, dt_pred]])
-
     return Jac
 
 
@@ -275,17 +275,19 @@ for k in range(1, simulation.nSteps):
     xOdom, u_tilde = simulation.get_odometry(k)
 
     # Kalman prediction
-    xPred = motion_model(xOdom,u_tilde,dt_pred)  # function f
-    Fmat=F(xOdom,u_tilde,dt_pred)
-    Gmat=G(xOdom,u_tilde,dt_pred)
+    xPred = motion_model(xEst,u_tilde,dt_pred)  # function f
+    Fmat=F(xEst,u_tilde,dt_pred)
+    Gmat=G(xEst,u_tilde,dt_pred)
     PPred = (np.dot(Fmat,np.dot(PEst,Fmat.T)))+np.dot(Gmat,np.dot(QEst,Gmat.T))
 
     # Get random landmark observation
     [z, iFeature] = simulation.get_observation(k) #z dato del sensor (Yt)
     
     if z is not None:
+    #if False:
         # Predict observation
         zPred = observation_model(xPred, iFeature, Map) #z dato predicho desde el radar y la odometria (h(Xt_hat))
+        zPred=zPred.reshape(2,1)
 
         # get observation Jacobian
         H = get_obs_jac(xPred, iFeature, Map)
@@ -293,8 +295,8 @@ for k in range(1, simulation.nSteps):
         # compute Kalman gain - with dir and distance
         Innov = z-zPred         # observation error (innovation)
         Innov[1, 0] = angle_wrap(Innov[1, 0])
-        S = REst + np.dot(H,np.dot(PEst,H.T))
-        K = np.dot(PEst,np.dot(H.   T,np.linalg.inv(S)))
+        S = REst + np.dot(H,np.dot(PPred,H.T))
+        K = np.dot(PPred,np.dot(H.T,np.linalg.inv(S)))
 
         # Compute Kalman gain to use only distance 
 #        Innov =        # observation error (innovation)
@@ -308,7 +310,7 @@ for k in range(1, simulation.nSteps):
 #        H = #...................           # observation error (innovation)
 #        S = #...................
 #        K = #...................
-
+        
         # perform kalman update
         xEst = xPred + np.dot(K,Innov)
         xEst[2, 0] = angle_wrap(xEst[2, 0])
@@ -317,7 +319,7 @@ for k in range(1, simulation.nSteps):
         
         
         PEst = 0.5 * (PEst + PEst.T)  # ensure symetry
-
+        
     else:
         # there was no observation available
         xEst = xPred
@@ -342,7 +344,7 @@ for k in range(1, simulation.nSteps):
         ax1.cla()
         
         times = np.stack(htime)
-
+        
         # Plot true landmark and trajectory
         ax1.plot(Map[0, :], Map[1, :], "*k")
         ax1.plot(hxTrue[0, :], hxTrue[1, :], "-k", label="True")
@@ -359,7 +361,7 @@ for k in range(1, simulation.nSteps):
         ax1.axis([-70, 70, -70, 70])
         ax1.grid(True)
         ax1.legend()
-
+        
         # plot errors curves
         ax3.plot(times, hxError[0, :], 'b')
         ax3.plot(times, 3.0 * hxVar[0, :], 'r')
@@ -368,7 +370,7 @@ for k in range(1, simulation.nSteps):
         ax3.set_ylabel('x')
         ax3.set_xlabel('time (s)')
         ax3.set_title('Real error (blue) and 3 $\sigma$ covariances (red)')
-
+        
         ax4.plot(times, hxError[1, :], 'b')
         ax4.plot(times, 3.0 * hxVar[1, :], 'r')
         ax4.plot(times, -3.0 * hxVar[1, :], 'r')
