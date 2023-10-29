@@ -71,9 +71,10 @@ class Simulation:
         # Ensuring random repetability for given k
         np.random.seed(seed*3 + k)
 
-        # Model
+        # Model 
         if k*self.dt_pred % self.dt_meas == 0:
             notValidCondition = False # False: measurement valid / True: measurement not valid
+            #notValidCondition = False if k < 2500 or k > 3500 else True
             if notValidCondition:
                 z = None
                 iFeature = None
@@ -84,7 +85,6 @@ class Simulation:
                 z = observation_model(self.xTrue, iFeature, self.Map) + zNoise.T
                 z=z.T
                 z[1, 0] = angle_wrap(z[1, 0])
-                print("EStoy aqui")
         else:
             z = None
             iFeature = None
@@ -117,7 +117,7 @@ def observation_model(xVeh, iFeature, Map):
 # ---- Kalman Filter: Jacobian functions to be completed ----
 
 # h(x) Jacobian wrt x
-def get_obs_jac(xPred, iFeature, Map):
+def  get_obs_jac(xPred, iFeature, Map):
     # xPred: predicted state
     # iFeature: observed amer index
     # Map: map of all amers
@@ -232,7 +232,7 @@ ax5 = plt.subplot(3, 2, 6)
 # Simulation time
 Tf = 6000       # final time (s)
 dt_pred = 1     # Time between two dynamical predictions (s)
-dt_meas = 1     # Time between two measurement updates (s)
+dt_meas = 1    # Time between two measurement updates (s)
 
 # Location of landmarks
 nLandmarks = 30
@@ -267,7 +267,7 @@ simulation = Simulation(Tf, dt_pred, xTrue, QTrue, xOdom, Map, RTrue, dt_meas)
 
 # Temporal loop
 for k in range(1, simulation.nSteps):
-
+        
     # Simulate robot motion
     simulation.simulate_world(k)
 
@@ -280,23 +280,48 @@ for k in range(1, simulation.nSteps):
     Gmat=G(xEst,u_tilde,dt_pred)
     PPred = (np.dot(Fmat,np.dot(PEst,Fmat.T)))+np.dot(Gmat,np.dot(QEst,Gmat.T))
 
+    if k==1 or k % 1000 == 0 :
+        print("Iteration: ", k)
+
+
     # Get random landmark observation
-    [z, iFeature] = simulation.get_observation(k) #z dato del sensor (Yt)
-    
+    [z, iFeature] = simulation.get_observation(k) #z: actual readings from the sensors (Yt)
+
     if z is not None:
     #if False:
         # Predict observation
-        zPred = observation_model(xPred, iFeature, Map) #z dato predicho desde el radar y la odometria (h(Xt_hat))
+        zPred = observation_model(xPred, iFeature, Map) # predicted sensor measurements given the predicted state estimate 
         zPred=zPred.reshape(2,1)
 
         # get observation Jacobian
         H = get_obs_jac(xPred, iFeature, Map)
 
-        # compute Kalman gain - with dir and distance
-        Innov = z-zPred         # observation error (innovation)
-        Innov[1, 0] = angle_wrap(Innov[1, 0])
-        S = REst + np.dot(H,np.dot(PPred,H.T))
-        K = np.dot(PPred,np.dot(H.T,np.linalg.inv(S)))
+        only = "none"
+
+        if only == 'range':
+            Innov=z[0]-zPred[0]   
+            Innov = angle_wrap(Innov)
+            Innov=np.squeeze(Innov)
+            H = H[0, :]
+            H=np.array([H])
+            S = REst[0,0]+np.dot(H,np.dot(PPred,H.T))
+            K = np.dot(PPred,np.dot(H.T,1/S))
+
+        elif only == 'angle':
+            Innov=z[1]-zPred[1]   
+            Innov = angle_wrap(Innov)
+            Innov=np.squeeze(Innov)
+            H = H[1, :]
+            H=np.array([H])
+            S = REst[1,1]+np.dot(H,np.dot(PPred,H.T))
+            K = np.dot(PPred,np.dot(H.T,1/S))
+
+        else:
+            # compute Kalman gain - with dir and distance
+            Innov = z-zPred   # observation error (innovation)
+            Innov[1, 0] = angle_wrap(Innov[1, 0])
+            S = REst + np.dot(H,np.dot(PPred,H.T))
+            K = np.dot(PPred,np.dot(H.T,np.linalg.inv(S)))
 
         # Compute Kalman gain to use only distance 
 #        Innov =        # observation error (innovation)
@@ -334,7 +359,7 @@ for k in range(1, simulation.nSteps):
     hxError = np.hstack((hxError, err))
     hxVar = np.hstack((hxVar, np.sqrt(np.diag(PEst).reshape(3, 1))))
     htime.append(k*simulation.dt_pred)
-
+    
     # plot every 15 updates
     if show_animation and k*simulation.dt_pred % 200 == 0:
         # for stopping simulation with the esc key.
