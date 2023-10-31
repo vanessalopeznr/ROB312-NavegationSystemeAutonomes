@@ -252,6 +252,7 @@ REst = 10*np.eye(2, 2) @ RTrue
 xTrue = np.array([[1, -40, -pi/2]]).T
 xOdom = xTrue
 xEst = xTrue
+print("Initial state: ", xEst)
 PEst = 10 * np.diag([1, 1, (1*pi/180)**2])
 
 # Init history matrixes
