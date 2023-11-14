@@ -297,12 +297,15 @@ for k in range(1, simulation.nSteps):
         # get observation Jacobian
         H = get_obs_jac(xPred, iFeature, Map)
 
-        only = "none"
+        only = "range"
 
         if only == 'range':
             Innov=z[0]-zPred[0]   
-            Innov = angle_wrap(Innov)
+            #Innov = angle_wrap(Innov)
             Innov=np.squeeze(Innov)
+            if k == 1:
+                #Innov 1x1, z 2x1, zPred 2x1
+                print("innov : ",Innov,Innov.shape, " y : ",z,z.shape, " yp : ",zPred,zPred.shape)
             H = H[0, :]
             H=np.array([H])
             S = REst[0,0]+np.dot(H,np.dot(PPred,H.T))
@@ -321,6 +324,9 @@ for k in range(1, simulation.nSteps):
             # compute Kalman gain - with dir and distance
             Innov = z-zPred   # observation error (innovation)
             Innov[1, 0] = angle_wrap(Innov[1, 0])
+            if k == 1:
+                #Innov 2x1, z 2x1, zPred 2x1
+                print("innov : ",Innov,Innov.shape, " y : ",z,z.shape, " yp : ",zPred,zPred.shape)
             S = REst + np.dot(H,np.dot(PPred,H.T))
             K = np.dot(PPred,np.dot(H.T,np.linalg.inv(S)))
 

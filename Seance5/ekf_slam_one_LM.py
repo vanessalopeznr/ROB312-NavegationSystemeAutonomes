@@ -10,11 +10,17 @@ import math
 from random import randint
 import matplotlib.pyplot as plt
 import numpy as np
+import os
+try:
+    os.makedirs("outputs")
+except:
+    pass
 
 DT = 0.1  # time tick [s]
-SIM_TIME = 80.0  # simulation time [s]
+SIM_TIME = 20.0  # simulation time [s]
 MAX_RANGE = 10.0  # maximum observation range
 M_DIST_TH = 9.0  # Threshold of Mahalanobis distance for data association.
+HYPOT_TH = 0.5  # Threshold of distance for deleting landmarks
 STATE_SIZE = 3  # State size [x,y,yaw]
 LM_SIZE = 2  # LM state size [x,y]
 KNOWN_DATA_ASSOCIATION = 0  # Whether we use the true landmarks id or not
@@ -30,6 +36,7 @@ Py_sim = (1 * np.diag([0.1, np.deg2rad(5)])) ** 2
 Q =  2 * Q_sim
 # Estimated measurement noise for Kalman Filter
 Py = 2 * Py_sim # Py.shape = (2,2) which the 2 columns are [distance, angle] 
+Py[0,0] *= 10 # increase the variance of the distance
 
 # Initial estimate of pose covariance
 initPEst = 0.01 * np.eye(STATE_SIZE)
@@ -54,7 +61,6 @@ def calc_n_lm(x):
     """
 
     n = int((len(x) - STATE_SIZE) / LM_SIZE)
-    print("n_lm = ",n)
     return n
 
 
@@ -130,7 +136,7 @@ def calc_input():
     """
 
     v = 1  # [m/s]
-    yaw_rate = 0.1  # [rad/s]
+    yaw_rate = 0.001  # [rad/s]
     u = np.array([[v, yaw_rate]]).T
     return u
 
@@ -158,7 +164,7 @@ def jacob_motion(x, u):
                   [0.0, 1.0, float(DT * u[0] * math.cos(x[2, 0]))],
                   [0.0, 0.0, 1.0]])
 
-    # Jacobian of f(X,u) wrt u
+    # Jacobian of f(X,u) wrt u  
     B = np.array([[float(DT * math.cos(x[2, 0])), 0.0],
                   [float(DT * math.sin(x[2, 0])), 0.0],
                   [0.0, DT]])
@@ -212,9 +218,9 @@ def search_correspond_landmark_id(xEst, PEst, yi):
     for i in range(nLM):
         innov, S, H = calc_innovation(xEst, PEst, yi, i)
         min_dist.append(innov.T @ np.linalg.inv(S) @ innov)
-        
+            
 
-    min_dist.append(M_DIST_TH)  # new landmark
+    min_dist.append(M_DIST_TH) 
     min_id = min_dist.index(min(min_dist))
 
     #return the index of the landmark with the smallest distance
@@ -272,19 +278,18 @@ def calc_innovation(xEst, PEst, y, LMid):
     yp = np.array([[math.sqrt(q), pi_2_pi(y_angle)]])
 
     # compute innovation, i.e. diff with real observation
-    innov = (y - yp).T
-    #innov = (y - yp).T
-    innov[1] = pi_2_pi(innov[1])
+    Innov = (y - yp).T
+    innov = np.array([pi_2_pi(Innov[1])]) # innov is only the angle
 
     # compute matrixes for Kalman Gain
     H = jacob_h(q, delta, xEst, LMid)
-    #H= H[:,0:2]
-    #PEst = PEst[0:2,0:2]
-    S = H @ PEst @ H.T + Py    
+    H = np.array([H[1,:]])
+    S = H @ PEst @ H.T + Py[1,1] # Py[1,1] is the variance of the angle  
+
     return innov, S, H
 
 
-def ekf_slam(xEst, PEst, u, y):
+def ekf_slam(xEst, PEst, u, y, hypothesis):
     """
     Apply one step of EKF predict/correct cycle
     """
@@ -295,6 +300,7 @@ def ekf_slam(xEst, PEst, u, y):
     A, B = jacob_motion(xEst[0:S], u)
 
     xEst[0:S] = motion_model(xEst[0:S], u)
+
     PEst[0:S, 0:S] = A @ PEst[0:S, 0:S] @ A.T + B @ Q @ B.T
     PEst[0:S,S:] = A @ PEst[0:S,S:]
     PEst[S:,0:S] = PEst[0:S,S:].T
@@ -318,16 +324,20 @@ def ekf_slam(xEst, PEst, u, y):
         # Extend map if required
         if min_id == nLM:
             print("New LM")
-            
-            # Extend state and covariance matrix
-            xEst = np.vstack((xEst, calc_landmark_position(xEst, y[iy, :])))
 
-            Jr, Jy = jacob_augment(xEst[0:3], y[iy, :])
-            bottomPart = np.hstack((Jr @ PEst[0:3, 0:3], Jr @ PEst[0:3, 3:]))
-            rightPart = bottomPart.T
-            PEst = np.vstack((np.hstack((PEst, rightPart)),
-                              np.hstack((bottomPart,
-                              Jr @ PEst[0:3, 0:3] @ Jr.T + Jy @ Py @ Jy.T))))
+            for i in range(len(hypothesis)):
+  
+                y[iy, 0] = 3 + 2*i # distance between the landmarks
+
+                # Extend state and covariance matrix
+                xEst = np.vstack((xEst, calc_landmark_position(xEst, y[iy, :]))) # xEst is the state vector which is [robot pose, landmark 1, landmark 2, ...]
+
+                Jr, Jy = jacob_augment(xEst[0:3], y[iy, :])
+                bottomPart = np.hstack((Jr @ PEst[0:3, 0:3], Jr @ PEst[0:3, 3:]))
+                rightPart = bottomPart.T
+                PEst = np.vstack((np.hstack((PEst, rightPart)),
+                                np.hstack((bottomPart,
+                                Jr @ PEst[0:3, 0:3] @ Jr.T + Jy @ Py @ Jy.T))))
 
         else:
             # Perform Kalman update
@@ -339,10 +349,25 @@ def ekf_slam(xEst, PEst, u, y):
                         
             PEst = (np.eye(len(xEst)) - K @ H) @ PEst
             PEst = 0.5 * (PEst + PEst.T)  # Ensure symetry
+            
+            hypothesis[min_id] += 1
+
+            repetability = hypothesis/np.max(hypothesis)
+            
+            for i in reversed(range(len(hypothesis))):
+                if repetability[i] < HYPOT_TH and np.sum(hypothesis) > 30:
+
+                    hypothesis = np.delete(hypothesis,i)
+    
+                    delete_id = [3+2*i,4+2*i] # Remove the landmark and its covariance
+                    PEst = np.delete(PEst,delete_id, axis=0)
+                    PEst = np.delete(PEst,delete_id, axis=1)
+                    xEst = np.delete(xEst,delete_id, axis=0)                    
+
         
     xEst[2] = pi_2_pi(xEst[2])
 
-    return xEst, PEst
+    return xEst, PEst, hypothesis
 
 
 # --- Main script
@@ -353,10 +378,8 @@ def main():
     time = 0.0
 
     # Define landmark positions [x, y]
-    Landmarks = np.array([[0.0, 5.0],
-                          [11.0, 1.0],
-                          [3.0, 15.0],
-                          [-5.0, 20.0]])
+    Landmarks = np.array([[5.0, 5.0]])
+    hypothesis = np.zeros(5)
     
     #Aleatoire
     nLandmarks = 5
@@ -370,7 +393,6 @@ def main():
     #Land = np.vstack((Land,np.vstack((linspace2, 10*np.ones((1,5)))).T))
     #Land = np.vstack((Land,np.vstack((linspace2, 15*np.ones((1,5)))).T))
     #Landmarks = np.vstack((Land,np.vstack((linspace2, 20*np.ones((1,5)))).T))
-
 
 
     # Init state vector [x y yaw]' and covariance for Kalman
@@ -390,7 +412,6 @@ def main():
     hxError = np.abs(xEst-xTrue)  # pose error
     hxVar = np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))  #state std dev
 
-
     # counter for plotting
     count = 0
 
@@ -402,7 +423,7 @@ def main():
         uTrue = calc_input()
         xTrue, y, xDR, u = observation(xTrue, xDR, uTrue, Landmarks)
 
-        xEst, PEst = ekf_slam(xEst, PEst, u, y)
+        xEst, PEst, hypothesis = ekf_slam(xEst, PEst, u, y, hypothesis)
 
         # store data history
         hxEst = np.hstack((hxEst, xEst[0:STATE_SIZE]))
@@ -414,7 +435,7 @@ def main():
         hxVar = np.hstack((hxVar,np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))))
 
 
-        if show_animation and count%15==0:
+        if show_animation and count%1==0:
             # for stopping simulation with the esc key.
             plt.gcf().canvas.mpl_connect('key_release_event',
                     lambda event: [exit(0) if event.key == 'escape' else None])
@@ -442,7 +463,7 @@ def main():
 
 
 
-            ax1.axis([-12, 12, -2, 22])
+            ax1.axis([-2, 10, -2, 12])
             ax1.grid(True)
             ax1.legend()
             
@@ -463,6 +484,8 @@ def main():
             ax5.set_ylabel(r"$\theta$")
 
             plt.pause(0.001)
+
+            plt.savefig(r'outputs/SRL' + str(count) + '.png')
 
 
     plt.savefig('EKFSLAM.png')

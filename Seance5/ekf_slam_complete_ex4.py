@@ -7,14 +7,15 @@ Modified : Goran Frehse, David Filliat
 """
 
 import math
-from random import randint
+
 import matplotlib.pyplot as plt
 import numpy as np
 
 DT = 0.1  # time tick [s]
 SIM_TIME = 80.0  # simulation time [s]
-MAX_RANGE = 10.0  # maximum observation range
+MAX_RANGE = 12.0  # maximum observation range
 M_DIST_TH = 9.0  # Threshold of Mahalanobis distance for data association.
+# M_DIST_TH = 5.0 # Short loop
 STATE_SIZE = 3  # State size [x,y,yaw]
 LM_SIZE = 2  # LM state size [x,y]
 KNOWN_DATA_ASSOCIATION = 0  # Whether we use the true landmarks id or not
@@ -27,9 +28,11 @@ Py_sim = (1 * np.diag([0.1, np.deg2rad(5)])) ** 2
 
 # Kalman filter Parameters
 # Estimated input noise for Kalman Filter
-Q =  2 * Q_sim
+Q = 2 * Q_sim
 # Estimated measurement noise for Kalman Filter
-Py = 2 * Py_sim # Py.shape = (2,2) which the 2 columns are [distance, angle] 
+Py = 2 * Py_sim
+
+Py[0, 0] = 10 * Py[0, 0]
 
 # Initial estimate of pose covariance
 initPEst = 0.01 * np.eye(STATE_SIZE)
@@ -54,7 +57,6 @@ def calc_n_lm(x):
     """
 
     n = int((len(x) - STATE_SIZE) / LM_SIZE)
-    print("n_lm = ",n)
     return n
 
 
@@ -130,7 +132,13 @@ def calc_input():
     """
 
     v = 1  # [m/s]
-    yaw_rate = 0.1  # [rad/s]
+    
+    # Long loop
+    yaw_rate = 1  # [rad/s]
+    
+    # Short loop
+    # yaw_rate = 0.2  # [rad/s]
+    
     u = np.array([[v, yaw_rate]]).T
     return u
 
@@ -162,6 +170,7 @@ def jacob_motion(x, u):
     B = np.array([[float(DT * math.cos(x[2, 0])), 0.0],
                   [float(DT * math.sin(x[2, 0])), 0.0],
                   [0.0, DT]])
+    
 
     return A, B
 
@@ -215,9 +224,9 @@ def search_correspond_landmark_id(xEst, PEst, yi):
         
 
     min_dist.append(M_DIST_TH)  # new landmark
+
     min_id = min_dist.index(min(min_dist))
 
-    #return the index of the landmark with the smallest distance
     return min_id
 
 
@@ -227,19 +236,19 @@ def jacob_h(q, delta, x, i):
     """
 
     sq = math.sqrt(q)
-    G = np.array([[-sq * delta[0, 0], - sq * delta[1, 0], 0, sq * delta[0, 0], sq * delta[1, 0]], # jacob wrt robot pose
-                  [delta[1, 0], -delta[0, 0], -q,  -delta[1, 0], delta[0, 0]]]) # jacob wrt landmark i
+    G = np.array([[-sq * delta[0, 0], - sq * delta[1, 0], 0, sq * delta[0, 0], sq * delta[1, 0]],
+                  [delta[1, 0], -delta[0, 0], -q,  -delta[1, 0], delta[0, 0]]])
 
     G = G / q
-    nLM = calc_n_lm(x) # number of landmarks in state vector
-    F1 = np.hstack((np.eye(3), np.zeros((3, 2 * nLM)))) # jacob wrt robot pose
+    nLM = calc_n_lm(x)
+    F1 = np.hstack((np.eye(3), np.zeros((3, 2 * nLM))))
     F2 = np.hstack((np.zeros((2, 3)), np.zeros((2, 2 * i)),
-                    np.eye(2), np.zeros((2, 2 * nLM - 2 * (i + 1))))) # jacob wrt landmark i
+                    np.eye(2), np.zeros((2, 2 * nLM - 2 * (i + 1)))))
 
     F = np.vstack((F1, F2))
 
-    H = G @ F # jacob wrt state vector which is [robot pose, landmark 1, landmark 2, ...]
-    # For have only the distance in H, we take only the 2 first columns with H[:,0:1] 
+    H = G @ F
+
     return H
 
 
@@ -273,18 +282,20 @@ def calc_innovation(xEst, PEst, y, LMid):
 
     # compute innovation, i.e. diff with real observation
     innov = (y - yp).T
-    #innov = (y - yp).T
-    innov[1] = pi_2_pi(innov[1])
+    innov = pi_2_pi(innov[1])
+    innov = np.array([innov])
 
     # compute matrixes for Kalman Gain
     H = jacob_h(q, delta, xEst, LMid)
-    #H= H[:,0:2]
-    #PEst = PEst[0:2,0:2]
-    S = H @ PEst @ H.T + Py    
+    H = H[1, :]
+    H = np.array([H])
+    S = H @ PEst @ H.T + Py[1, 1]
+    
+    
     return innov, S, H
 
 
-def ekf_slam(xEst, PEst, u, y):
+def ekf_slam(xEst, PEst, u, y, n_update_LM):
     """
     Apply one step of EKF predict/correct cycle
     """
@@ -295,15 +306,16 @@ def ekf_slam(xEst, PEst, u, y):
     A, B = jacob_motion(xEst[0:S], u)
 
     xEst[0:S] = motion_model(xEst[0:S], u)
+
     PEst[0:S, 0:S] = A @ PEst[0:S, 0:S] @ A.T + B @ Q @ B.T
     PEst[0:S,S:] = A @ PEst[0:S,S:]
     PEst[S:,0:S] = PEst[0:S,S:].T
 
     PEst = (PEst + PEst.T) / 2.0  # ensure symetry
-
+    
     # Update
     for iy in range(len(y[:, 0])):  # for each observation
-        nLM = calc_n_lm(xEst) # number of landmarks in state vector
+        nLM = calc_n_lm(xEst)
         
         if KNOWN_DATA_ASSOCIATION:
             try:
@@ -312,7 +324,7 @@ def ekf_slam(xEst, PEst, u, y):
                 min_id = nLM
                 trueLandmarkId.append(y[iy, 2])
         else:
-            min_id = search_correspond_landmark_id(xEst, PEst, y[iy, 0:2]) # find the index of the landmark with the smallest distance
+            min_id = search_correspond_landmark_id(xEst, PEst, y[iy, 0:2])
 
 
         # Extend map if required
@@ -320,18 +332,20 @@ def ekf_slam(xEst, PEst, u, y):
             print("New LM")
             
             # Extend state and covariance matrix
-            xEst = np.vstack((xEst, calc_landmark_position(xEst, y[iy, :])))
+            for i in range(3):
+                # Create the new landmarks
+                y[iy, 0] = 2 + 7*i
+                xEst = np.vstack((xEst, calc_landmark_position(xEst, y[iy, :])))
 
-            Jr, Jy = jacob_augment(xEst[0:3], y[iy, :])
-            bottomPart = np.hstack((Jr @ PEst[0:3, 0:3], Jr @ PEst[0:3, 3:]))
-            rightPart = bottomPart.T
-            PEst = np.vstack((np.hstack((PEst, rightPart)),
-                              np.hstack((bottomPart,
-                              Jr @ PEst[0:3, 0:3] @ Jr.T + Jy @ Py @ Jy.T))))
+                Jr, Jy = jacob_augment(xEst[0:3], y[iy, :])
+                bottomPart = np.hstack((Jr @ PEst[0:3, 0:3], Jr @ PEst[0:3, 3:]))
+                rightPart = bottomPart.T
+                PEst = np.vstack((np.hstack((PEst, rightPart)),
+                                np.hstack((bottomPart,
+                                Jr @ PEst[0:3, 0:3] @ Jr.T + Jy @ Py @ Jy.T))))
 
         else:
             # Perform Kalman update
-            print("No new LM")
             innov, S, H = calc_innovation(xEst, PEst, y[iy, 0:2], min_id)
             K = (PEst @ H.T) @ np.linalg.inv(S)
             
@@ -339,10 +353,28 @@ def ekf_slam(xEst, PEst, u, y):
                         
             PEst = (np.eye(len(xEst)) - K @ H) @ PEst
             PEst = 0.5 * (PEst + PEst.T)  # Ensure symetry
+            
+            # Add update
+            n_update_LM[min_id] += 1
+            
+            # If percentage is greater than the threshold, remove the others landmarks
+            n_update_percentage = n_update_LM / np.sum(n_update_LM)
+            if (np.max(n_update_percentage) > 0.85) and (not np.any(n_update_percentage == 0)):
+                index_not_max = np.where(n_update_percentage != np.max(n_update_percentage))[0]
+                index_to_delete = []
+                for j in index_not_max:
+                    index_to_delete.append(3+2*j)
+                    index_to_delete.append(4+2*j)
+                
+                if max(index_to_delete) < len(PEst):
+                    PEst = np.delete(PEst, index_to_delete, axis=0)
+                    PEst = np.delete(PEst, index_to_delete, axis=1)
+                    xEst = np.delete(xEst, index_to_delete, axis=0)
+                
         
     xEst[2] = pi_2_pi(xEst[2])
 
-    return xEst, PEst
+    return xEst, PEst, n_update_LM
 
 
 # --- Main script
@@ -353,25 +385,17 @@ def main():
     time = 0.0
 
     # Define landmark positions [x, y]
-    Landmarks = np.array([[0.0, 5.0],
-                          [11.0, 1.0],
-                          [3.0, 15.0],
-                          [-5.0, 20.0]])
     
-    #Aleatoire
-    nLandmarks = 5
-    Map = 2.5*np.random.rand(2, nLandmarks)
-    Map[0,:] = Map[0,:] - 1
-    #Landmarks = Map.T
-
-    linspace2 = np.linspace(-10, 10, 5)
-    Land = np.vstack((linspace2,np.zeros((1,5)))).T
-    #Land = np.vstack((Land,np.vstack((linspace2, 5*np.ones((1,5)))).T))
-    #Land = np.vstack((Land,np.vstack((linspace2, 10*np.ones((1,5)))).T))
-    #Land = np.vstack((Land,np.vstack((linspace2, 15*np.ones((1,5)))).T))
-    #Landmarks = np.vstack((Land,np.vstack((linspace2, 20*np.ones((1,5)))).T))
-
-
+    # Default
+    # Landmarks = np.array([[0.0, 5.0],
+    #                       [11.0, 1.0],
+    #                       [3.0, 15.0],
+    #                       [-5.0, 20.0]])
+    
+    
+    # Spare map with few landmarks
+    Landmarks = np.array([[0.0, 10.0]])
+    
 
     # Init state vector [x y yaw]' and covariance for Kalman
     xEst = np.zeros((STATE_SIZE, 1))
@@ -382,6 +406,9 @@ def main():
 
     # Init dead reckoning (sum of individual controls)
     xDR = np.zeros((STATE_SIZE, 1))
+    
+    # Initialize how many the covariance of the landmarks position was updated
+    n_update_LM = np.zeros(3*len(Landmarks))
 
     # Init history
     hxEst = xEst
@@ -401,8 +428,7 @@ def main():
         # Simulate motion and generate u and y
         uTrue = calc_input()
         xTrue, y, xDR, u = observation(xTrue, xDR, uTrue, Landmarks)
-
-        xEst, PEst = ekf_slam(xEst, PEst, u, y)
+        xEst, PEst, n_update_LM = ekf_slam(xEst, PEst, u, y, n_update_LM)
 
         # store data history
         hxEst = np.hstack((hxEst, xEst[0:STATE_SIZE]))
@@ -423,13 +449,13 @@ def main():
             
             # Plot true landmark and trajectory
             ax1.plot(Landmarks[:, 0], Landmarks[:, 1], "*k")
-            ax1.plot(hxTrue[0, :], hxTrue[1, :], "-k", label="True")
+            ax1.plot(hxTrue[0, :], hxTrue[1, :], "-k")
 
             # Plot odometry trajectory
-            ax1.plot(hxDR[0, :], hxDR[1, :], "-g", label="Odom")
+            ax1.plot(hxDR[0, :], hxDR[1, :], "-g")
 
             # Plot estimated trajectory, pose and landmarks
-            ax1.plot(hxEst[0, :], hxEst[1, :], "-r", label="SLAM")
+            ax1.plot(hxEst[0, :], hxEst[1, :], "-r")
             ax1.plot(xEst[0], xEst[1], ".r")
             plot_covariance_ellipse(xEst[0: STATE_SIZE],
                                     PEst[0: STATE_SIZE, 0: STATE_SIZE], ax1, "--r")
@@ -444,7 +470,6 @@ def main():
 
             ax1.axis([-12, 12, -2, 22])
             ax1.grid(True)
-            ax1.legend()
             
             # plot errors curves
             ax3.plot(hxError[0, :],'b')
@@ -463,7 +488,6 @@ def main():
             ax5.set_ylabel(r"$\theta$")
 
             plt.pause(0.001)
-
 
     plt.savefig('EKFSLAM.png')
 

@@ -7,17 +7,19 @@ Modified : Goran Frehse, David Filliat
 """
 
 import math
-from random import randint
+
 import matplotlib.pyplot as plt
 import numpy as np
+import time as tt
 
 DT = 0.1  # time tick [s]
-SIM_TIME = 80.0  # simulation time [s]
+SIM_TIME = 10  # simulation time [s]
 MAX_RANGE = 10.0  # maximum observation range
 M_DIST_TH = 9.0  # Threshold of Mahalanobis distance for data association.
 STATE_SIZE = 3  # State size [x,y,yaw]
 LM_SIZE = 2  # LM state size [x,y]
 KNOWN_DATA_ASSOCIATION = 0  # Whether we use the true landmarks id or not
+Landmark_points = 5
 
 # Simulation parameter
 # noise on control input
@@ -27,9 +29,10 @@ Py_sim = (1 * np.diag([0.1, np.deg2rad(5)])) ** 2
 
 # Kalman filter Parameters
 # Estimated input noise for Kalman Filter
-Q =  2 * Q_sim
+Q = 2 * Q_sim
 # Estimated measurement noise for Kalman Filter
-Py = 2 * Py_sim # Py.shape = (2,2) which the 2 columns are [distance, angle] 
+Py = 2 * Py_sim
+Py[0,0] *= 7
 
 # Initial estimate of pose covariance
 initPEst = 0.01 * np.eye(STATE_SIZE)
@@ -54,7 +57,6 @@ def calc_n_lm(x):
     """
 
     n = int((len(x) - STATE_SIZE) / LM_SIZE)
-    print("n_lm = ",n)
     return n
 
 
@@ -67,6 +69,18 @@ def calc_landmark_position(x, y):
 
     yp[0, 0] = x[0, 0] + y[0] * math.cos(x[2, 0] + y[1])
     yp[1, 0] = x[1, 0] + y[0] * math.sin(x[2, 0] + y[1])
+
+    return yp
+
+def calc_landmark_position2(x, y, d):
+    """
+    Computes absolute landmark position from robot pose and observation
+    """
+
+    yp = np.zeros((2, 1))
+
+    yp[0, 0] = x[0, 0] + d * math.cos(x[2, 0] + y[1])
+    yp[1, 0] = x[1, 0] + d * math.sin(x[2, 0] + y[1])
 
     return yp
 
@@ -130,7 +144,8 @@ def calc_input():
     """
 
     v = 1  # [m/s]
-    yaw_rate = 0.1  # [rad/s]
+    yaw_rate = 0.0  # [rad/s]
+    #yaw_rate = 0.3  # [rad/s]
     u = np.array([[v, yaw_rate]]).T
     return u
 
@@ -215,9 +230,9 @@ def search_correspond_landmark_id(xEst, PEst, yi):
         
 
     min_dist.append(M_DIST_TH)  # new landmark
+
     min_id = min_dist.index(min(min_dist))
 
-    #return the index of the landmark with the smallest distance
     return min_id
 
 
@@ -227,19 +242,19 @@ def jacob_h(q, delta, x, i):
     """
 
     sq = math.sqrt(q)
-    G = np.array([[-sq * delta[0, 0], - sq * delta[1, 0], 0, sq * delta[0, 0], sq * delta[1, 0]], # jacob wrt robot pose
-                  [delta[1, 0], -delta[0, 0], -q,  -delta[1, 0], delta[0, 0]]]) # jacob wrt landmark i
+    G = np.array([[-sq * delta[0, 0], - sq * delta[1, 0], 0, sq * delta[0, 0], sq * delta[1, 0]],
+                  [delta[1, 0], -delta[0, 0], -q,  -delta[1, 0], delta[0, 0]]])
 
     G = G / q
-    nLM = calc_n_lm(x) # number of landmarks in state vector
-    F1 = np.hstack((np.eye(3), np.zeros((3, 2 * nLM)))) # jacob wrt robot pose
+    nLM = calc_n_lm(x)
+    F1 = np.hstack((np.eye(3), np.zeros((3, 2 * nLM))))
     F2 = np.hstack((np.zeros((2, 3)), np.zeros((2, 2 * i)),
-                    np.eye(2), np.zeros((2, 2 * nLM - 2 * (i + 1))))) # jacob wrt landmark i
+                    np.eye(2), np.zeros((2, 2 * nLM - 2 * (i + 1)))))
 
     F = np.vstack((F1, F2))
 
-    H = G @ F # jacob wrt state vector which is [robot pose, landmark 1, landmark 2, ...]
-    # For have only the distance in H, we take only the 2 first columns with H[:,0:1] 
+    H = G @ F
+
     return H
 
 
@@ -273,37 +288,37 @@ def calc_innovation(xEst, PEst, y, LMid):
 
     # compute innovation, i.e. diff with real observation
     innov = (y - yp).T
-    #innov = (y - yp).T
-    innov[1] = pi_2_pi(innov[1])
+    innov = np.array([pi_2_pi(innov[1])])
 
     # compute matrixes for Kalman Gain
     H = jacob_h(q, delta, xEst, LMid)
-    #H= H[:,0:2]
-    #PEst = PEst[0:2,0:2]
-    S = H @ PEst @ H.T + Py    
+    H = np.array([H[1,:]])
+    S = (H @ PEst @ H.T + Py[1,1])
+    
     return innov, S, H
 
 
-def ekf_slam(xEst, PEst, u, y):
+def ekf_slam(xEst, PEst, u, y, landmark_vote):
     """
     Apply one step of EKF predict/correct cycle
     """
     
-    S = STATE_SIZE
+    Sz = STATE_SIZE
     
     # Predict
-    A, B = jacob_motion(xEst[0:S], u)
+    A, B = jacob_motion(xEst[0:Sz], u)
 
-    xEst[0:S] = motion_model(xEst[0:S], u)
-    PEst[0:S, 0:S] = A @ PEst[0:S, 0:S] @ A.T + B @ Q @ B.T
-    PEst[0:S,S:] = A @ PEst[0:S,S:]
-    PEst[S:,0:S] = PEst[0:S,S:].T
+    xEst[0:Sz] = motion_model(xEst[0:Sz], u)
+
+    PEst[0:Sz, 0:Sz] = A @ PEst[0:Sz, 0:Sz] @ A.T + B @ Q @ B.T
+    PEst[0:Sz,Sz:] = A @ PEst[0:Sz,Sz:]
+    PEst[Sz:,0:Sz] = PEst[0:Sz,Sz:].T
 
     PEst = (PEst + PEst.T) / 2.0  # ensure symetry
-
+    
     # Update
     for iy in range(len(y[:, 0])):  # for each observation
-        nLM = calc_n_lm(xEst) # number of landmarks in state vector
+        nLM = calc_n_lm(xEst)
         
         if KNOWN_DATA_ASSOCIATION:
             try:
@@ -312,26 +327,27 @@ def ekf_slam(xEst, PEst, u, y):
                 min_id = nLM
                 trueLandmarkId.append(y[iy, 2])
         else:
-            min_id = search_correspond_landmark_id(xEst, PEst, y[iy, 0:2]) # find the index of the landmark with the smallest distance
+            min_id = search_correspond_landmark_id(xEst, PEst, y[iy, 0:2])
 
 
         # Extend map if required
         if min_id == nLM:
             print("New LM")
-            
-            # Extend state and covariance matrix
-            xEst = np.vstack((xEst, calc_landmark_position(xEst, y[iy, :])))
 
-            Jr, Jy = jacob_augment(xEst[0:3], y[iy, :])
-            bottomPart = np.hstack((Jr @ PEst[0:3, 0:3], Jr @ PEst[0:3, 3:]))
-            rightPart = bottomPart.T
-            PEst = np.vstack((np.hstack((PEst, rightPart)),
-                              np.hstack((bottomPart,
-                              Jr @ PEst[0:3, 0:3] @ Jr.T + Jy @ Py @ Jy.T))))
+            for i in range(Landmark_points):
+                # Extend state and covariance matrix
+                y[iy, 0] = 3 + i*2
+                xEst = np.vstack((xEst, calc_landmark_position(xEst, y[iy, :])))
+
+                Jr, Jy = jacob_augment(xEst[0:3], y[iy, :])
+                bottomPart = np.hstack((Jr @ PEst[0:3, 0:3], Jr @ PEst[0:3, 3:]))
+                rightPart = bottomPart.T
+                PEst = np.vstack((np.hstack((PEst, rightPart)),
+                                np.hstack((bottomPart,
+                                Jr @ PEst[0:3, 0:3] @ Jr.T + Jy @ Py @ Jy.T))))
 
         else:
             # Perform Kalman update
-            print("No new LM")
             innov, S, H = calc_innovation(xEst, PEst, y[iy, 0:2], min_id)
             K = (PEst @ H.T) @ np.linalg.inv(S)
             
@@ -339,10 +355,28 @@ def ekf_slam(xEst, PEst, u, y):
                         
             PEst = (np.eye(len(xEst)) - K @ H) @ PEst
             PEst = 0.5 * (PEst + PEst.T)  # Ensure symetry
+            landmark_vote[min_id] += 1
+
+            # verify if needs to delete points
+            percentage = landmark_vote/np.max(landmark_vote)
+            print("percent ",percentage)
+            print("landmark vote ",landmark_vote)
+                    
+            for i in range(len(landmark_vote)):
+                if percentage[i] < 0.4 and np.sum(landmark_vote) > 30:
+                    # needs to remove a point
+                    print("xEst ",xEst.shape," xEst ",xEst)
+                    PEst = np.delete(PEst,[3+2*i,4+2*i], axis=0)
+                    PEst = np.delete(PEst,[3+2*i,4+2*i], axis=1)
+                    xEst = np.delete(xEst,[3+2*i,4+2*i], axis=0)
+                    landmark_vote = np.delete(landmark_vote,i)
+                    i -= 1
+                    #landmark_vote = np.delete(landmark_vote,i,axis=0)
+
         
     xEst[2] = pi_2_pi(xEst[2])
 
-    return xEst, PEst
+    return xEst, PEst, landmark_vote
 
 
 # --- Main script
@@ -353,35 +387,46 @@ def main():
     time = 0.0
 
     # Define landmark positions [x, y]
-    Landmarks = np.array([[0.0, 5.0],
-                          [11.0, 1.0],
-                          [3.0, 15.0],
-                          [-5.0, 20.0]])
-    
-    #Aleatoire
-    nLandmarks = 5
-    Map = 2.5*np.random.rand(2, nLandmarks)
-    Map[0,:] = Map[0,:] - 1
-    #Landmarks = Map.T
+    # Landmarks = np.array([[0.0, 5.0],
+    #                       [11.0, 1.0],
+    #                       [3.0, 15.0],
+    #                       [-5.0, 20.0],])
 
-    linspace2 = np.linspace(-10, 10, 5)
-    Land = np.vstack((linspace2,np.zeros((1,5)))).T
-    #Land = np.vstack((Land,np.vstack((linspace2, 5*np.ones((1,5)))).T))
-    #Land = np.vstack((Land,np.vstack((linspace2, 10*np.ones((1,5)))).T))
-    #Land = np.vstack((Land,np.vstack((linspace2, 15*np.ones((1,5)))).T))
-    #Landmarks = np.vstack((Land,np.vstack((linspace2, 20*np.ones((1,5)))).T))
+    # xL = np.array(range(-60, 61, 10)).reshape(-1, 1)
+    # yL = np.array(range(-10, 101, 10)).reshape(-1, 1)
+    # Landmarks = []
+
+    # for i in range(len(xL)):
+    #     for j in range(len(yL)):
+    #         Landmarks.append([xL[i][0], yL[j][0]])
 
 
+    # xL = np.array(range(-4, 5, 2)).reshape(-1, 1)
+    # yL = np.array(range(-1, 8, 2)).reshape(-1, 1)
+    # Landmarks = []
+
+    # for i in range(len(xL)):
+    #     for j in range(len(yL)):
+    #         Landmarks.append([xL[i][0], yL[j][0]])
+
+    #Landmarks = np.array(Landmarks)
+
+    Landmarks = np.array([[5.0, 5.0]])
 
     # Init state vector [x y yaw]' and covariance for Kalman
     xEst = np.zeros((STATE_SIZE, 1))
+    #xEst[2] = np.pi/2 
     PEst = initPEst
 
     # Init true state for simulator
     xTrue = np.zeros((STATE_SIZE, 1))
+    #xTrue[2] = np.pi/2
 
     # Init dead reckoning (sum of individual controls)
     xDR = np.zeros((STATE_SIZE, 1))
+    #xDR[2] = np.pi/2
+
+
 
     # Init history
     hxEst = xEst
@@ -390,11 +435,16 @@ def main():
     hxError = np.abs(xEst-xTrue)  # pose error
     hxVar = np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))  #state std dev
 
+    # landmark_vote = []
+    # landmark_instance = []
+    # landmark_counter = 0
+    landmark_vote = np.zeros(Landmark_points)
 
     # counter for plotting
     count = 0
 
     while  time <= SIM_TIME:
+        #qtt.sleep(0.2)
         count = count + 1
         time += DT
 
@@ -402,7 +452,7 @@ def main():
         uTrue = calc_input()
         xTrue, y, xDR, u = observation(xTrue, xDR, uTrue, Landmarks)
 
-        xEst, PEst = ekf_slam(xEst, PEst, u, y)
+        xEst, PEst, landmark_vote = ekf_slam(xEst, PEst, u, y, landmark_vote)
 
         # store data history
         hxEst = np.hstack((hxEst, xEst[0:STATE_SIZE]))
@@ -414,7 +464,7 @@ def main():
         hxVar = np.hstack((hxVar,np.sqrt(np.diag(PEst[0:STATE_SIZE,0:STATE_SIZE]).reshape(3,1))))
 
 
-        if show_animation and count%15==0:
+        if show_animation and count%1==0:
             # for stopping simulation with the esc key.
             plt.gcf().canvas.mpl_connect('key_release_event',
                     lambda event: [exit(0) if event.key == 'escape' else None])
@@ -423,13 +473,13 @@ def main():
             
             # Plot true landmark and trajectory
             ax1.plot(Landmarks[:, 0], Landmarks[:, 1], "*k")
-            ax1.plot(hxTrue[0, :], hxTrue[1, :], "-k", label="True")
+            ax1.plot(hxTrue[0, :], hxTrue[1, :], "-k")
 
             # Plot odometry trajectory
-            ax1.plot(hxDR[0, :], hxDR[1, :], "-g", label="Odom")
+            ax1.plot(hxDR[0, :], hxDR[1, :], "-b")
 
             # Plot estimated trajectory, pose and landmarks
-            ax1.plot(hxEst[0, :], hxEst[1, :], "-r", label="SLAM")
+            ax1.plot(hxEst[0, :], hxEst[1, :], "-r")
             ax1.plot(xEst[0], xEst[1], ".r")
             plot_covariance_ellipse(xEst[0: STATE_SIZE],
                                     PEst[0: STATE_SIZE, 0: STATE_SIZE], ax1, "--r")
@@ -442,9 +492,10 @@ def main():
 
 
 
-            ax1.axis([-12, 12, -2, 22])
+            #ax1.axis([-5, 5, -2, 8])
+            #ax1.axis([-60, 60, -10, 110])
+            ax1.axis([-2, 12, -2, 12])
             ax1.grid(True)
-            ax1.legend()
             
             # plot errors curves
             ax3.plot(hxError[0, :],'b')
@@ -466,6 +517,8 @@ def main():
 
 
     plt.savefig('EKFSLAM.png')
+
+    print(landmark_vote)
 
     tErrors = np.sqrt(np.square(hxError[0, :]) + np.square(hxError[1, :]))
     oErrors = np.sqrt(np.square(hxError[2, :]))
